@@ -21,6 +21,8 @@
 #import "SocketIO.h"
 #import "SocketIOPacket.h"
 #import "SocketIOJSONSerialization.h"
+#import "SocketIOTransportWebsocket.h"
+#import "SocketIOTransportXHR.h"
 
 #ifdef DEBUG
 #define DEBUG_LOGS 1
@@ -66,6 +68,10 @@ NSString* const SocketIOException = @"SocketIOException";
 - (void) removeAcknowledgeForKey:(NSString *)key;
 - (NSMutableArray*) getMatchesFrom:(NSString*)data with:(NSString*)regex;
 
+@end
+
+@interface SocketIO ()
+@property(nonatomic, strong) NSMutableArray *availableTransportProtocols;
 @end
 
 # pragma mark -
@@ -645,6 +651,41 @@ NSString* const SocketIOException = @"SocketIOException";
     }
 }
 
+- (void)onTryConnectingTimeout
+{
+    NSString *failedTransportProtocolName = [self transportProtocolName];
+    DEBUGLOG(@"try connecting using %@ is timeout.", failedTransportProtocolName);
+
+    [self.availableTransportProtocols removeObject:failedTransportProtocolName];
+
+    // retry connecting
+    BOOL connectionFailed = [self initTransport];
+    NSError *error;
+    if (connectionFailed) {
+        error = [NSError errorWithDomain:SocketIOError
+                         code:SocketIOTransportsNotSupported
+                         userInfo:nil];
+    }
+
+    // if connection didn't return the values we need -> fail
+    if (connectionFailed) {
+        [self didFailConnecting:error];
+    } else {
+        DEBUGLOG(@"retry connecting using %@", [self transportProtocolName]);
+        [_transport open];
+    }
+}
+
+- (NSString *)transportProtocolName
+{
+    if ([_transport isMemberOfClass:[SocketIOTransportWebsocket class]]) {
+        return @"websocket";
+    } else if ([_transport isMemberOfClass:[SocketIOTransportXHR class]]) {
+        return @"xhr-polling";
+    } else {
+        return nil;
+    }
+}
 
 # pragma mark -
 # pragma mark Handshake callbacks (NSURLConnectionDataDelegate)
@@ -741,30 +782,11 @@ NSString* const SocketIOException = @"SocketIOException";
         
         // get transports
         NSString *t = [data objectAtIndex:3];
-        NSArray *transports = [t componentsSeparatedByString:@","];
-        DEBUGLOG(@"transports: %@", transports);
-        
-        static Class webSocketTransportClass;
-        static Class xhrTransportClass;
-        
-        if (webSocketTransportClass == nil) {
-            webSocketTransportClass = NSClassFromString(@"SocketIOTransportWebsocket");
-        }
-        if (xhrTransportClass == nil) {
-            xhrTransportClass = NSClassFromString(@"SocketIOTransportXHR");
-        }
-        
-        if (webSocketTransportClass != nil && [transports indexOfObject:@"websocket"] != NSNotFound) {
-            DEBUGLOG(@"websocket supported -> using it now");
-            _transport = [[webSocketTransportClass alloc] initWithDelegate:self];
-        }
-        else if (xhrTransportClass != nil && [transports indexOfObject:@"xhr-polling"] != NSNotFound) {
-            DEBUGLOG(@"xhr polling supported -> using it now");
-            _transport = [[xhrTransportClass alloc] initWithDelegate:self];
-        }
-        else {
-            DEBUGLOG(@"no transport found that is supported :( -> fail");
-            connectionFailed = true;
+        self.availableTransportProtocols = [t componentsSeparatedByString:@","].mutableCopy;
+        DEBUGLOG(@"availableTransportProtocols: %@", self.availableTransportProtocols);
+
+        connectionFailed = [self initTransport];
+        if (connectionFailed) {
             error = [NSError errorWithDomain:SocketIOError
                                         code:SocketIOTransportsNotSupported
                                     userInfo:nil];
@@ -773,24 +795,54 @@ NSString* const SocketIOException = @"SocketIOException";
     
     // if connection didn't return the values we need -> fail
     if (connectionFailed) {
-        // error already set!?
-        if (error == nil) {
-            error = [NSError errorWithDomain:SocketIOError
-                                        code:SocketIOServerRespondedWithInvalidConnectionData
-                                    userInfo:nil];
-        }
-
-        if ([_delegate respondsToSelector:@selector(socketIO:onError:)]) {
-            [_delegate socketIO:self onError:error];
-        }
-        
-        // make sure to do call all cleanup code
-        [self onDisconnect:error];
-        
-        return;
+        [self didFailConnecting:error];
+    } else {
+        [_transport open];
     }
-    
-    [_transport open];
+}
+
+- (BOOL)initTransport
+{
+    static Class webSocketTransportClass;
+    static Class xhrTransportClass;
+
+    if (webSocketTransportClass == nil) {
+        webSocketTransportClass = NSClassFromString(@"SocketIOTransportWebsocket");
+    }
+    if (xhrTransportClass == nil) {
+        xhrTransportClass = NSClassFromString(@"SocketIOTransportXHR");
+    }
+
+    if (webSocketTransportClass != nil && [self.availableTransportProtocols indexOfObject:@"websocket"] != NSNotFound) {
+        DEBUGLOG(@"websocket supported -> using it now");
+        _transport = [[webSocketTransportClass alloc] initWithDelegate:self];
+        return NO;
+    }
+    else if (xhrTransportClass != nil && [self.availableTransportProtocols indexOfObject:@"xhr-polling"] != NSNotFound) {
+        DEBUGLOG(@"xhr polling supported -> using it now");
+        _transport = [[xhrTransportClass alloc] initWithDelegate:self];
+        return NO;
+    }
+    else {
+        DEBUGLOG(@"no transport found that is supported :( -> fail");
+        return YES;
+    }
+}
+
+- (void)didFailConnecting:(NSError *)error {
+    // error already set!?
+    if (error == nil) {
+        error = [NSError errorWithDomain:SocketIOError
+                         code:SocketIOServerRespondedWithInvalidConnectionData
+                         userInfo:nil];
+    }
+
+    if ([_delegate respondsToSelector:@selector(socketIO:onError:)]) {
+        [_delegate socketIO:self onError:error];
+    }
+
+    // make sure to do call all cleanup code
+    [self onDisconnect:error];
 }
 
 #if DEBUG_CERTIFICATE

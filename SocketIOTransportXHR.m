@@ -193,6 +193,10 @@ static NSString* kSecureXHRPortURL = @"https://%@:%d/socket.io/1/xhr-polling/%@"
     }
     
     [_data setLength:0];
+
+    // prevent memory leak
+    NSURLCache *sharedCache = [[NSURLCache alloc] initWithMemoryCapacity:0 diskCapacity:0 diskPath:nil];
+    [NSURLCache setSharedURLCache:sharedCache];
 }
 
 - (void) connection:(NSURLConnection *)connection didReceiveData:(NSData *)data

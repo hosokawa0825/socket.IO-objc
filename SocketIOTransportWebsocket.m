@@ -33,6 +33,11 @@ static NSString* kInsecureSocketURL = @"ws://%@/socket.io/1/websocket/%@";
 static NSString* kSecureSocketURL = @"wss://%@/socket.io/1/websocket/%@";
 static NSString* kInsecureSocketPortURL = @"ws://%@:%d/socket.io/1/websocket/%@";
 static NSString* kSecureSocketPortURL = @"wss://%@:%d/socket.io/1/websocket/%@";
+static NSInteger tryConnectingTimeoutSec = 1;
+
+@interface SocketIOTransportWebsocket()
+@property(nonatomic, strong) NSTimer *tryConnectingTimeoutTimer;
+@end
 
 @implementation SocketIOTransportWebsocket
 
@@ -72,6 +77,13 @@ static NSString* kSecureSocketPortURL = @"wss://%@:%d/socket.io/1/websocket/%@";
     _webSocket.delegate = self;
     DEBUGLOG(@"Opening %@", url);
     [_webSocket open];
+
+    self.tryConnectingTimeoutTimer = [NSTimer scheduledTimerWithTimeInterval:tryConnectingTimeoutSec target:self selector:@selector(couldNotEstablishConnection) userInfo:nil repeats:NO];
+}
+
+- (void)couldNotEstablishConnection {
+    [self close];
+    [self.delegate onTryConnectingTimeout];
 }
 
 - (void) dealloc
@@ -104,6 +116,7 @@ static NSString* kSecureSocketPortURL = @"wss://%@:%d/socket.io/1/websocket/%@";
 - (void) webSocketDidOpen:(SRWebSocket *)webSocket
 {
     DEBUGLOG(@"Socket opened.");
+    [self.tryConnectingTimeoutTimer invalidate];
 }
 
 - (void) webSocket:(SRWebSocket *)webSocket didFailWithError:(NSError *)error

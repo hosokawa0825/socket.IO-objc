@@ -25,6 +25,7 @@
 - (void) onData:(id)message;
 - (void) onDisconnect:(NSError*)error;
 - (void) onError:(NSError*)error;
+- (void) onTryConnectingTimeout;
 
 @property (nonatomic, readonly) NSString *host;
 @property (nonatomic, readonly) NSInteger port;
